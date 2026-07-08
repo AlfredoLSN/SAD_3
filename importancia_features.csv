@@ -1,0 +1,13 @@
+feature,importance
+media_acidentes_mensal_ult_6m,0.3407884611157417
+total_acidentes_ult_6m,0.33170328709397556
+mes_previsao,0.06210338077762154
+perc_pista_risco_ult_6m,0.04047402562967273
+perc_dispositivo_problema_ult_6m,0.03283668490317281
+velocidade_media_ult_6m,0.030281347238450947
+perc_defeito_via_ult_6m,0.030075888336838857
+num_units_medio_ult_6m,0.02936184153487327
+perc_clima_risco_ult_6m,0.027492106416464518
+perc_acidentes_noite_ult_6m,0.025436398518766293
+perc_iluminacao_risco_ult_6m,0.025379490728070525
+perc_acidentes_fim_semana_ult_6m,0.02406708770635109
