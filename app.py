@@ -190,7 +190,12 @@ def carregar_dimensao_beats():
     beats["BEAT_NUM"] = beats["BEAT_NUM"].astype(str)
     beats["DISTRICT"] = beats["DISTRICT"].astype(str)
     beats["SECTOR"] = beats["SECTOR"].astype(str)
+    beats = beats.drop_duplicates(subset=["BEAT_NUM"], keep="first")
     return beats.rename(columns={"BEAT_NUM": "BEAT_OF_OCCURRENCE"})
+
+
+def ordenar_valores_texto_numerico(valores):
+    return sorted(valores, key=lambda valor: int(valor) if str(valor).isdigit() else str(valor))
 
 
 @st.cache_resource(show_spinner=False)
@@ -219,27 +224,43 @@ def prever_prioridade_manual(modelo, features, entrada):
 def aplicar_filtros(pred, dimensao):
     dados = pred.merge(dimensao, on="BEAT_OF_OCCURRENCE", how="left")
 
-    with st.sidebar:
-        st.header("Filtros")
-
-        prioridades = st.multiselect(
-            "Prioridade prevista",
-            ["ALTA", "MEDIA", "BAIXA"],
-            default=["ALTA", "MEDIA", "BAIXA"],
+    distritos = ordenar_valores_texto_numerico(dados["DISTRICT"].dropna().unique())
+    with st.container(border=True):
+        col_prioridade, col_distrito, col_ranking = st.columns(
+            [2.2, 1, 1.2],
+            vertical_alignment="bottom",
         )
 
-        distritos = sorted(dados["DISTRICT"].dropna().unique())
-        distrito_sel = st.multiselect("Distrito", distritos, default=distritos)
+        with col_prioridade:
+            prioridades = st.pills(
+                "Prioridade",
+                ["ALTA", "MEDIA", "BAIXA"],
+                selection_mode="multi",
+                default=["ALTA", "MEDIA", "BAIXA"],
+                width="stretch",
+            )
 
-        setores = sorted(dados["SECTOR"].dropna().unique())
-        setor_sel = st.multiselect("Setor", setores, default=setores)
+        with col_distrito:
+            with st.popover("Distritos", icon=":material/map:", width="stretch"):
+                distrito_sel = st.multiselect(
+                    "Distritos",
+                    distritos,
+                    default=distritos,
+                    label_visibility="collapsed",
+                )
 
-        limite_ranking = st.slider("Itens no ranking", 5, 30, 15)
+        with col_ranking:
+            limite_ranking = st.slider(
+                "Ranking",
+                5,
+                30,
+                15,
+                help="Quantidade de beats exibidos no ranking.",
+            )
 
     filtrado = dados[
         dados["prioridade_prevista"].isin(prioridades)
         & dados["DISTRICT"].isin(distrito_sel)
-        & dados["SECTOR"].isin(setor_sel)
     ].copy()
 
     return filtrado, limite_ranking
