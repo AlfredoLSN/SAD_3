@@ -345,6 +345,10 @@ def aplicar_filtros(pred, dimensao):
     return filtrado, limite_ranking
 
 
+def juntar_dimensao(pred, dimensao):
+    return pred.merge(dimensao, on="BEAT_OF_OCCURRENCE", how="left")
+
+
 def card_metrica(label, valor, ajuda=None):
     st.metric(label, valor, help=ajuda)
 
@@ -781,7 +785,7 @@ def main():
     importancias = carregar_importancias()
     metricas_classe, matriz_confusao, resumo_metricas = carregar_metricas_teste()
 
-    dados, limite_ranking = aplicar_filtros(pred, dimensao)
+    dados = juntar_dimensao(pred, dimensao)
 
     mes_previsao = pred["MES_REF"].max()
     fim_janela_previsao = mes_previsao + pd.DateOffset(months=2)
@@ -804,7 +808,8 @@ def main():
     )
 
     with tab1:
-        aba_visao_geral(dados, geojson, limite_ranking)
+        dados_filtrados, limite_ranking = aplicar_filtros(pred, dimensao)
+        aba_visao_geral(dados_filtrados, geojson, limite_ranking)
     with tab2:
         aba_priorizacao(dados)
     with tab3:
