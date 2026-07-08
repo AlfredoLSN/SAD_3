@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import joblib
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -12,6 +13,7 @@ PREDICOES_PATH = BASE_DIR / "predicoes_dashboard_ultimo_mes.csv"
 BEATS_PATH = BASE_DIR / "PoliceBeatDec2012_20260707.csv"
 BASE_MENSAL_PATH = BASE_DIR / "base_beat_mes.csv"
 IMPORTANCIA_PATH = BASE_DIR / "importancia_features.csv"
+MODELO_PATH = BASE_DIR / "modelo_prioridade_beat.pkl"
 
 CORES_PRIORIDADE = {
     "ALTA": "#c1121f",
@@ -189,6 +191,29 @@ def carregar_dimensao_beats():
     beats["DISTRICT"] = beats["DISTRICT"].astype(str)
     beats["SECTOR"] = beats["SECTOR"].astype(str)
     return beats.rename(columns={"BEAT_NUM": "BEAT_OF_OCCURRENCE"})
+
+
+@st.cache_resource(show_spinner=False)
+def carregar_modelo():
+    artefatos = joblib.load(MODELO_PATH)
+    return artefatos["modelo"], artefatos["features"]
+
+
+def prever_prioridade_manual(modelo, features, entrada):
+    linha = pd.DataFrame([entrada])
+    linha = linha.reindex(columns=features, fill_value=0).fillna(0)
+
+    classe = modelo.predict(linha)[0]
+    probas = modelo.predict_proba(linha)[0]
+
+    resultado = entrada.copy()
+    resultado["prioridade_prevista"] = classe
+
+    for classe_modelo, probabilidade in zip(modelo.classes_, probas):
+        resultado[f"prob_{classe_modelo.lower()}"] = probabilidade
+
+    resultado["prob_prioridade_prevista"] = resultado[f"prob_{classe.lower()}"]
+    return pd.Series(resultado)
 
 
 def aplicar_filtros(pred, dimensao):
@@ -515,6 +540,107 @@ def aba_modelo(importancias):
     )
 
 
+def aba_simulador():
+    modelo, features = carregar_modelo()
+
+    st.subheader("Simulador de prioridade")
+
+    col_base, col_contexto, col_operacao = st.columns(3)
+
+    with col_base:
+        total_acidentes = st.number_input(
+            "Acidentes nos ultimos 6 meses",
+            min_value=0,
+            value=180,
+            step=1,
+        )
+        velocidade_media = st.number_input(
+            "Velocidade media",
+            min_value=0.0,
+            value=30.0,
+            step=1.0,
+        )
+        num_units_medio = st.number_input(
+            "Media de unidades envolvidas",
+            min_value=0.0,
+            value=2.0,
+            step=0.1,
+        )
+        mes_previsao = st.selectbox(
+            "Mes inicial da janela prevista",
+            list(range(1, 13)),
+            index=6,
+            format_func=lambda mes: f"{mes:02d}",
+        )
+
+    with col_contexto:
+        perc_noite = st.slider("% acidentes a noite", 0, 100, 30)
+        perc_fim_semana = st.slider("% acidentes no fim de semana", 0, 100, 25)
+        perc_clima = st.slider("% com clima de risco", 0, 100, 15)
+        perc_iluminacao = st.slider("% com iluminacao de risco", 0, 100, 35)
+
+    with col_operacao:
+        perc_pista = st.slider("% com pista de risco", 0, 100, 20)
+        perc_defeito = st.slider("% com defeito na via", 0, 100, 3)
+        perc_dispositivo = st.slider("% com problema em dispositivo", 0, 100, 2)
+
+    entrada = {
+        "total_acidentes_ult_6m": float(total_acidentes),
+        "media_acidentes_mensal_ult_6m": float(total_acidentes) / 6,
+        "perc_acidentes_noite_ult_6m": perc_noite / 100,
+        "perc_acidentes_fim_semana_ult_6m": perc_fim_semana / 100,
+        "perc_iluminacao_risco_ult_6m": perc_iluminacao / 100,
+        "perc_pista_risco_ult_6m": perc_pista / 100,
+        "perc_defeito_via_ult_6m": perc_defeito / 100,
+        "perc_dispositivo_problema_ult_6m": perc_dispositivo / 100,
+        "perc_clima_risco_ult_6m": perc_clima / 100,
+        "velocidade_media_ult_6m": float(velocidade_media),
+        "num_units_medio_ult_6m": float(num_units_medio),
+        "mes_previsao": int(mes_previsao),
+    }
+
+    resultado = prever_prioridade_manual(modelo, features, entrada)
+
+    st.divider()
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        card_metrica("Prioridade simulada", resultado["prioridade_prevista"])
+    with c2:
+        card_metrica("Prob. alta", formatar_percentual(resultado.get("prob_alta", 0)))
+    with c3:
+        card_metrica("Confianca da classe", formatar_percentual(resultado["prob_prioridade_prevista"]))
+    with c4:
+        card_metrica("Media mensal", formatar_numero(resultado["media_acidentes_mensal_ult_6m"], 1))
+
+    st.info(recomendacao_operacional(resultado))
+
+    probs = pd.DataFrame(
+        {
+            "Classe": ["ALTA", "MEDIA", "BAIXA"],
+            "Probabilidade": [
+                resultado.get("prob_alta", 0),
+                resultado.get("prob_media", 0),
+                resultado.get("prob_baixa", 0),
+            ],
+        }
+    )
+    fig_probs = px.bar(
+        probs,
+        x="Classe",
+        y="Probabilidade",
+        color="Classe",
+        color_discrete_map=CORES_PRIORIDADE,
+        text=probs["Probabilidade"].map(formatar_percentual),
+    )
+    fig_probs.update_layout(
+        height=320,
+        yaxis_tickformat=".0%",
+        showlegend=False,
+        margin={"r": 10, "t": 20, "l": 10, "b": 10},
+    )
+    st.plotly_chart(fig_probs, width="stretch")
+
+
 def main():
     st.title("Sistema de Apoio a Decisao para Priorizacao de Police Beats")
 
@@ -542,8 +668,8 @@ def main():
             f"{fim_janela_previsao:%m/%Y}."
         )
 
-    tab1, tab2, tab3, tab4 = st.tabs(
-        ["Visao geral", "Priorizacao", "Diagnostico do beat", "Modelo"]
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(
+        ["Visao geral", "Priorizacao", "Diagnostico do beat", "Simulador", "Modelo"]
     )
 
     with tab1:
@@ -553,6 +679,8 @@ def main():
     with tab3:
         aba_diagnostico(dados, mensal)
     with tab4:
+        aba_simulador()
+    with tab5:
         aba_modelo(importancias)
 
 
