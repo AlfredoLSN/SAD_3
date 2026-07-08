@@ -14,6 +14,7 @@ BEATS_PATH = BASE_DIR / "PoliceBeatDec2012_20260707.csv"
 BASE_MENSAL_PATH = BASE_DIR / "base_beat_mes.csv"
 IMPORTANCIA_PATH = BASE_DIR / "importancia_features.csv"
 MODELO_PATH = BASE_DIR / "modelo_prioridade_beat.pkl"
+PREDICOES_TESTE_PATH = BASE_DIR / "predicoes_teste.csv"
 
 CORES_PRIORIDADE = {
     "ALTA": "#c1121f",
@@ -155,6 +156,84 @@ def carregar_importancias():
     imp = pd.read_csv(IMPORTANCIA_PATH)
     imp["feature_label"] = imp["feature"].map(NOMES_FEATURES).fillna(imp["feature"])
     return imp.sort_values("importance", ascending=True)
+
+
+@st.cache_data(show_spinner=False)
+def carregar_metricas_teste():
+    if not PREDICOES_TESTE_PATH.exists():
+        return pd.DataFrame(), pd.DataFrame(), {}
+
+    teste = pd.read_csv(
+        PREDICOES_TESTE_PATH,
+        usecols=["prioridade_futura", "prioridade_prevista"],
+    ).dropna()
+
+    classes = ["ALTA", "MEDIA", "BAIXA"]
+    total = len(teste)
+    acuracia = (
+        (teste["prioridade_futura"] == teste["prioridade_prevista"]).mean()
+        if total > 0
+        else 0
+    )
+
+    linhas = []
+    for classe in classes:
+        tp = (
+            (teste["prioridade_futura"] == classe)
+            & (teste["prioridade_prevista"] == classe)
+        ).sum()
+        fp = (
+            (teste["prioridade_futura"] != classe)
+            & (teste["prioridade_prevista"] == classe)
+        ).sum()
+        fn = (
+            (teste["prioridade_futura"] == classe)
+            & (teste["prioridade_prevista"] != classe)
+        ).sum()
+        suporte = (teste["prioridade_futura"] == classe).sum()
+
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+        f1 = (
+            2 * precision * recall / (precision + recall)
+            if (precision + recall) > 0
+            else 0
+        )
+
+        linhas.append(
+            {
+                "Classe": classe,
+                "Precision": precision,
+                "Recall": recall,
+                "F1-score": f1,
+                "Suporte": suporte,
+            }
+        )
+
+    metricas_classe = pd.DataFrame(linhas)
+    macro_f1 = metricas_classe["F1-score"].mean() if not metricas_classe.empty else 0
+    weighted_f1 = (
+        (metricas_classe["F1-score"] * metricas_classe["Suporte"]).sum()
+        / metricas_classe["Suporte"].sum()
+        if metricas_classe["Suporte"].sum() > 0
+        else 0
+    )
+
+    matriz = pd.crosstab(
+        teste["prioridade_futura"],
+        teste["prioridade_prevista"],
+        rownames=["Real"],
+        colnames=["Prevista"],
+    ).reindex(index=classes, columns=classes, fill_value=0)
+
+    resumo = {
+        "acuracia": acuracia,
+        "macro_f1": macro_f1,
+        "weighted_f1": weighted_f1,
+        "total_teste": total,
+    }
+
+    return metricas_classe, matriz, resumo
 
 
 @st.cache_data(show_spinner=False)
@@ -526,18 +605,48 @@ def aba_diagnostico(dados, mensal):
     st.plotly_chart(fig_probs, width="stretch")
 
 
-def aba_modelo(importancias):
+def aba_modelo(importancias, metricas_classe, matriz_confusao, resumo_metricas):
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        card_metrica("Acuracia teste", "78,3%")
+        card_metrica("Acuracia teste", formatar_percentual(resumo_metricas.get("acuracia", 0)))
     with c2:
-        card_metrica("Precision ALTA", "74,7%")
+        card_metrica("Macro F1", formatar_percentual(resumo_metricas.get("macro_f1", 0)))
     with c3:
-        card_metrica("Recall ALTA", "78,5%")
+        card_metrica("Weighted F1", formatar_percentual(resumo_metricas.get("weighted_f1", 0)))
     with c4:
-        card_metrica("F1 ALTA", "76,5%")
+        card_metrica("Amostras de teste", formatar_numero(resumo_metricas.get("total_teste", 0)))
+
+    if not metricas_classe.empty:
+        metricas_fmt = metricas_classe.copy()
+        for coluna in ["Precision", "Recall", "F1-score"]:
+            metricas_fmt[coluna] = metricas_fmt[coluna].map(formatar_percentual)
+
+        col_metricas, col_matriz = st.columns([1.1, 1])
+        with col_metricas:
+            st.subheader("Metricas por classe")
+            st.dataframe(metricas_fmt, hide_index=True, width="stretch")
+
+        with col_matriz:
+            st.subheader("Matriz de confusao")
+            fig_matriz = px.imshow(
+                matriz_confusao,
+                text_auto=True,
+                color_continuous_scale=["#f8f9fa", "#f4a261", "#c1121f"],
+                labels={"x": "Prevista", "y": "Real", "color": "Qtd."},
+            )
+            fig_matriz.update_layout(
+                height=320,
+                margin={"r": 10, "t": 10, "l": 10, "b": 10},
+            )
+            st.plotly_chart(fig_matriz, width="stretch")
+
+        st.caption(
+            "A classe ALTA continua sendo a mais importante para decisao operacional, "
+            "mas as demais classes ajudam a avaliar equilibrio e confiabilidade geral."
+        )
 
     if not importancias.empty:
+        st.subheader("Importancia das variaveis")
         fig = px.bar(
             importancias,
             x="importance",
@@ -670,6 +779,7 @@ def main():
     geojson = carregar_geojson()
     mensal = carregar_base_mensal()
     importancias = carregar_importancias()
+    metricas_classe, matriz_confusao, resumo_metricas = carregar_metricas_teste()
 
     dados, limite_ranking = aplicar_filtros(pred, dimensao)
 
@@ -702,7 +812,7 @@ def main():
     with tab4:
         aba_simulador()
     with tab5:
-        aba_modelo(importancias)
+        aba_modelo(importancias, metricas_classe, matriz_confusao, resumo_metricas)
 
 
 if __name__ == "__main__":
